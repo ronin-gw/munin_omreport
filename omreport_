@@ -1,0 +1,182 @@
+#!/usr/bin/env python
+import sys
+import os.path
+import subprocess
+
+OMREPORT_PATH = ''
+OMREPORT_PATH = "omreport" if not OMREPORT_PATH else OMREPORT_PATH
+
+
+def print_config(graphsettings, fields):
+    print '\n'.join((
+        "graph_category sensors",
+        "graph_info {info}",
+        "graph_title {title}",
+        "graph_vlabel {vlabel}"
+    )).format(**graphsettings)
+    if "args" in graphsettings:
+        print "graph_args {args}"
+
+    for f in fields:
+        print '\n'.join((
+            "{name}.label {label}",
+        )).format(**f)
+        if "warning" in f and "critical" in f:
+            print '\n'.join((
+                "{name}.warning {warning}",
+                "{name}.critical {critical}"
+            )).format(**f)
+
+
+def _pwrmon_watt(config=False):
+    output = subprocess.check_output([OMREPORT_PATH, "chassis", "pwrmonitoring"])
+    for l in output.split('\n'):
+        if l.startswith("Probe Name"):
+            label = l.split(':', 1)[1].strip()
+            name = label.replace(' ', '_')
+        elif l.startswith("Reading"):
+            reading_watt = l.split()[2]
+        elif l.startswith("Warning Threshold"):
+            warning_watt = ':' + l.split()[3]
+        elif l.startswith("Failure Threshold"):
+            failure_watt = ':' + l.split()[3]
+            break
+
+    if config:
+        graphsettings = dict(
+            title="Power Consumption in Watt",
+            info="Power consumption read by 'omreport chassis pwrmonitoring'",
+            vlabel="Power Consumption [W]",
+            args="--base 1000 -l 0"
+        )
+        fields = [dict(
+            name=name,
+            label=label,
+            warning=warning_watt,
+            critical=failure_watt
+        )]
+        print_config(graphsettings, fields)
+    else:
+        print "{}.value {}".format(name, reading_watt)
+
+
+def _pwrmon_current(config=False):
+    output = subprocess.check_output([OMREPORT_PATH, "chassis", "pwrmonitoring"])
+    currents = []
+    for l in output.split('\n'):
+        if l.startswith("Probe Name"):
+            label = l.split(':', 1)[1].strip()
+            name = label.replace(' ', '_')
+        elif "Current" in l:
+            name, _, _, _, current, _ = l.split()
+            currents.append(dict(
+                name=name, label=name, value=current
+            ))
+
+    if config:
+        graphsettings = dict(
+            title="Power Consumption in Current",
+            info="Power consumption readed by 'omreport chassis pwrmonitoring'",
+            vlabel="Curret [A]",
+            args="--base 1000 -l 0"
+        )
+        print_config(graphsettings, currents)
+    else:
+        for current in currents:
+            print "{name}.value {value}".format(**current)
+
+
+def _temps(config=False):
+    output = subprocess.check_output([OMREPORT_PATH, "chassis", "temps"])
+    probes = []
+    for l in output.split('\n'):
+        if l.startswith("Probe Name"):
+            label = l.split(':', 1)[1].strip()
+            name = label.replace(' ', '_')
+        elif l.startswith("Reading"):
+            reading_temp = l.split()[2]
+        elif l.startswith("Minimum Warning Threshold"):
+            min_warning = l.split()[4]
+        elif l.startswith("Maximum Warning Threshold"):
+            max_warning = l.split()[4]
+        elif l.startswith("Minimum Failure Threshold"):
+            min_failure = l.split()[4]
+        elif l.startswith("Maximum Failure Threshold"):
+            max_failure = l.split()[4]
+            probes.append(dict(
+                name=name, label=label, value=reading_temp,
+                warning=min_warning + ':' + max_warning,
+                critical=min_failure + ':' + max_failure,
+            ))
+
+    if config:
+        graphsettings = dict(
+            title="Temperature Probes Information",
+            info="Temperatures read by 'omreport chassis temps'",
+            vlabel="Temperature [C]",
+            args=""
+        )
+        print_config(graphsettings, probes)
+    else:
+        for probe in probes:
+            print "{name}.value {value}".format(**probe)
+
+
+def _volts(config=False):
+    output = subprocess.check_output([OMREPORT_PATH, "chassis", "volts"])
+    probes = []
+    for l in output.split('\n'):
+        if l.startswith("Probe Name"):
+            label = l.split(':', 1)[1].strip()
+            name = label.replace(' ', '_')
+        elif l.startswith("Reading"):
+            reading_volts = l.split()[2]
+        # elif l.startswith("Minimum Warning Threshold"):
+        #     min_warning = l.split()[4]
+        # elif l.startswith("Maximum Warning Threshold"):
+        #     max_warning = l.split()[4]
+        # elif l.startswith("Minimum Failure Threshold"):
+        #     min_failure = l.split()[4]
+        elif l.startswith("Maximum Failure Threshold"):
+            # max_failure = l.split()[4]
+            if reading_volts.isdigit():
+                probes.append(dict(
+                    name=name, label=label, value=reading_volts
+                ))
+    if config:
+        graphsettings = dict(
+            title="Voltage Probes Information",
+            info="Voltage read by 'omreport chassis volts'",
+            vlabel="Voltage [V]",
+            args="--base 1000 -l 0"
+        )
+        print_config(graphsettings, probes)
+    else:
+        for probe in probes:
+            print "{name}.value {value}".format(**probe)
+
+
+PROC2FUNC = {
+    "watt": _pwrmon_watt,
+    "current": _pwrmon_current,
+    "temps": _temps,
+    "volts": _volts
+}
+
+
+if __name__ == "__main__":
+    proc = os.path.basename(sys.argv[0]).replace("omreport_", '')
+    if len(sys.argv) > 1:
+        opt = sys.argv[1]
+    else:
+        opt = ''
+
+    if opt == "autoconf":
+        if not OMREPORT_PATH:
+            print "no (command 'omreport' not found.)"
+        else:
+            print "yes"
+    elif opt == "config":
+        PROC2FUNC[proc](config=True)
+    else:
+        PROC2FUNC[proc]()
