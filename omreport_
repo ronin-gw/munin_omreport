@@ -15,17 +15,16 @@ def print_config(graphsettings, fields):
         "graph_vlabel {vlabel}"
     )).format(**graphsettings)
     if "args" in graphsettings:
-        print "graph_args {args}"
+        print "graph_args {args}".format(**graphsettings)
 
     for f in fields:
         print '\n'.join((
             "{name}.label {label}",
         )).format(**f)
-        if "warning" in f and "critical" in f:
-            print '\n'.join((
-                "{name}.warning {warning}",
-                "{name}.critical {critical}"
-            )).format(**f)
+        if "warning" in f:
+            print "{name}.warning {warning}".format(**f)
+        if "critical" in f:
+            print "{name}.critical {critical}".format(**f)
 
 
 def _pwrmon_watt(config=False):
@@ -97,24 +96,37 @@ def _temps(config=False):
             reading_temp = l.split()[2]
         elif l.startswith("Minimum Warning Threshold"):
             min_warning = l.split()[4]
+            if min_warning == "[N/A]":
+                min_warning = ''
         elif l.startswith("Maximum Warning Threshold"):
             max_warning = l.split()[4]
+            if max_warning == "[N/A]":
+                max_warning = ''
         elif l.startswith("Minimum Failure Threshold"):
             min_failure = l.split()[4]
+            if min_failure == "[N/A]":
+                min_failure = ''
         elif l.startswith("Maximum Failure Threshold"):
             max_failure = l.split()[4]
-            probes.append(dict(
+            if max_failure == "[N/A]":
+                max_failure = ''
+
+            d = dict(
                 name=name, label=label, value=reading_temp,
                 warning=min_warning + ':' + max_warning,
                 critical=min_failure + ':' + max_failure,
-            ))
+            )
+            for k in ("warning", "critical"):
+                if d[k] == ':':
+                    del d[k]
+
+            probes.append(d)
 
     if config:
         graphsettings = dict(
             title="Temperature Probes Information",
             info="Temperatures read by 'omreport chassis temps'",
-            vlabel="Temperature [C]",
-            args=""
+            vlabel="Temperature [C]"
         )
         print_config(graphsettings, probes)
     else:
