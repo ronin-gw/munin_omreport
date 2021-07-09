@@ -1,0 +1,167 @@
+#!/usr/bin/env python
+import sys
+import os.path
+import subprocess
+
+OMREPORT_PATH = ''
+OMREPORT_PATH = "omreport" if not OMREPORT_PATH else OMREPORT_PATH
+COMMAND = [OMREPORT_PATH, "storage", "enclosure"]
+
+
+def print_config(graphsettings, fields):
+    print '\n'.join((
+        "graph_scale no",
+        "graph_category sensors",
+        "graph_info {info}",
+        "graph_title {title}",
+        "graph_vlabel {vlabel}"
+    )).format(**graphsettings)
+    if "args" in graphsettings:
+        print "graph_args {args}".format(**graphsettings)
+
+    for f in fields:
+        print '\n'.join((
+            "{name}.label {label}",
+        )).format(**f)
+        if "warning" in f:
+            print "{name}.warning {warning}".format(**f)
+        if "critical" in f:
+            print "{name}.critical {critical}".format(**f)
+
+
+def _get_enclosures():
+    # Get valid controller IDs
+    try:
+        subprocess.check_output(COMMAND + ["controller=10000000"])
+    except subprocess.CalledProcessError as e:
+        assert e.returncode == 255
+        output = e.output
+    else:
+        raise RuntimeError
+    controllers = map(int, output.split("\n")[1].split(': ')[1].split(", "))
+
+    #
+    output = subprocess.check_output([OMREPORT_PATH, "storage", "enclosure"])
+    info = output.split("Enclosure(s) on Controller ")[1:]
+    for i, data in zip(controllers, info):
+        if "No enclosures found" in data:
+            continue
+
+        lines = data.split('\n')
+        #controller_name = lines[0]
+        for line in lines[1:]:
+            if line.startswith("ID"):
+                enclosure_id = line.split()[-1]
+            elif line.startswith("Name"):
+                name = line.split()[2]
+                enclosure_name = "{} ({})".format(name, enclosure_id)
+                yield i, enclosure_id, enclosure_name
+
+
+def _temps(config=False):
+    probes = []
+    for controller, enclosure_id, enclosure_name in _get_enclosures():
+        command = COMMAND + ["controller={}".format(controller), "enclosure={}".format(enclosure_id), "info=temps"]
+        try:
+            output = subprocess.check_output(command)
+        except subprocess.CalledProcessError:
+            continue
+
+        for l in output.split('\n'):
+            if l.startswith("Name"):
+                label = enclosure_name + ' ' + l.split(':', 1)[1].strip()
+                name = label.replace(' ', '_')
+            elif l.startswith("Reading"):
+                reading_temp = l.split()[2]
+            elif l.startswith("Minimum Warning Threshold"):
+                min_warning = l.split()[4]
+                if min_warning == "[N/A]":
+                    min_warning = ''
+            elif l.startswith("Maximum Warning Threshold"):
+                max_warning = l.split()[4]
+                if max_warning == "[N/A]":
+                    max_warning = ''
+            elif l.startswith("Minimum Failure Threshold"):
+                min_failure = l.split()[4]
+                if min_failure == "[N/A]":
+                    min_failure = ''
+            elif l.startswith("Maximum Failure Threshold"):
+                max_failure = l.split()[4]
+                if max_failure == "[N/A]":
+                    max_failure = ''
+
+                d = dict(
+                    name=name, label=label, value=reading_temp,
+                    warning=min_warning + ':' + max_warning,
+                    critical=min_failure + ':' + max_failure,
+                )
+                for k in ("warning", "critical"):
+                    if d[k] == ':':
+                        del d[k]
+
+                probes.append(d)
+
+    if config:
+        graphsettings = dict(
+            title="Temp Probes in Storage Enclosures",
+            info="Temperatures read by 'omreport storage enclosure'",
+            vlabel="Temperature [C]"
+        )
+        print_config(graphsettings, probes)
+    else:
+        for probe in probes:
+            print "{name}.value {value}".format(**probe)
+
+
+def _fans(config=False):
+    probes = []
+    for controller, enclosure_id, enclosure_name in _get_enclosures():
+        command = COMMAND + ["controller={}".format(controller), "enclosure={}".format(enclosure_id), "info=fans"]
+        try:
+            output = subprocess.check_output(command)
+        except subprocess.CalledProcessError:
+            continue
+
+        for l in output.split('\n'):
+            if l.startswith("Name"):
+                label = enclosure_name + ' ' + l.split(':', 1)[1].strip()
+                name = label.replace(' ', '_')
+            elif l.startswith("Speed"):
+                reading_temp = l.split()[2]
+                d = dict(name=name, label=label, value=reading_temp)
+                probes.append(d)
+
+    if config:
+        graphsettings = dict(
+            title="Fans Information",
+            info="Fan speed read by 'omreport storage enclosure'",
+            vlabel="Speed [rpm]"
+        )
+        print_config(graphsettings, probes)
+    else:
+        for probe in probes:
+            print "{name}.value {value}".format(**probe)
+
+
+PROC2FUNC = {
+    "temps": _temps,
+    "fans": _fans
+}
+
+
+if __name__ == "__main__":
+    proc = os.path.basename(sys.argv[0]).replace("omreport_storage_enclosure_", '')
+    if len(sys.argv) > 1:
+        opt = sys.argv[1]
+    else:
+        opt = ''
+
+    if opt == "autoconf":
+        if not OMREPORT_PATH:
+            print "no (command 'omreport' not found.)"
+        else:
+            print "yes"
+    elif opt == "config":
+        PROC2FUNC[proc](config=True)
+    else:
+        PROC2FUNC[proc]()
